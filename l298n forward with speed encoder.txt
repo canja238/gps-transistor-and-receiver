@@ -1,0 +1,91 @@
+// Pin definitions for encoder sensor 1
+const int encoderPin1 = 2;  // Digital input pin for encoder 1 output
+volatile int pulseCount1 = 0; // Variable to store pulse count for encoder 1
+
+// Pin definitions for encoder sensor 2
+const int encoderPin2 = 3;  // Digital input pin for encoder 2 output
+volatile int pulseCount2 = 0; // Variable to store pulse count for encoder 2
+
+unsigned long lastTime1 = 0;   // Time of last RPM calculation for encoder 1
+unsigned long lastTime2 = 0;   // Time of last RPM calculation for encoder 2
+float RPM1 = 0;                 // Variable to store calculated RPM for encoder 1
+float RPM2 = 0;                 // Variable to store calculated RPM for encoder 2
+
+// Pin definitions for motor control
+const int ENA = 12;  // Enable pin for Motor A
+const int ENB = 13;  // Enable pin for Motor B
+
+const int motorPin1  = 8;  // Pin 14 of L293D
+const int motorPin2  = 9;  // Pin 10 of L293D
+const int motorPin3  = 11; // Pin 7 of L293D
+const int motorPin4  = 10; // Pin 2 of L293D
+
+// Interrupt service routine for encoder 1 pulse count
+void pulseISR1() {
+  pulseCount1++;  // Increment pulse count for encoder 1
+}
+
+// Interrupt service routine for encoder 2 pulse count
+void pulseISR2() {
+  pulseCount2++;  // Increment pulse count for encoder 2
+}
+
+void setup() {
+    // Initialize serial communication for monitoring
+    Serial.begin(9600);
+
+    // Set up motor control pins
+    pinMode(ENA, OUTPUT);
+    pinMode(ENB, OUTPUT);
+    pinMode(motorPin1, OUTPUT);
+    pinMode(motorPin2, OUTPUT);
+    pinMode(motorPin3, OUTPUT);
+    pinMode(motorPin4, OUTPUT);
+
+    // Set motor speed to max (255)
+    analogWrite(ENA, 250);
+    analogWrite(ENB, 250);
+
+    // Run both motors forward
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+
+    // Set up encoder pins and attach interrupts
+    pinMode(encoderPin1, INPUT);
+    attachInterrupt(digitalPinToInterrupt(encoderPin1), pulseISR1, RISING);  // Trigger on rising edge for encoder 1
+
+    pinMode(encoderPin2, INPUT);
+    attachInterrupt(digitalPinToInterrupt(encoderPin2), pulseISR2, RISING);  // Trigger on rising edge for encoder 2
+}
+
+void loop() {
+    // Check if a second has passed to calculate RPM for encoder 1
+    unsigned long currentTime1 = millis();
+    if (currentTime1 - lastTime1 >= 1000) {  // 1000 milliseconds = 1 second
+        // Calculate RPM for encoder 1: pulseCount per second * 60 to convert to minutes
+        RPM1 = (pulseCount1 * 60.0) / 1.0;  // Assume 1 pulse per revolution for encoder 1
+        pulseCount1 = 0;  // Reset pulse count for the next second
+        lastTime1 = currentTime1;  // Update the last time for encoder 1
+
+        // Print the RPM for encoder 1 to the Serial Monitor
+        Serial.print("RPM 1: ");
+        Serial.println(RPM1);
+    }
+
+    // Check if a second has passed to calculate RPM for encoder 2
+    unsigned long currentTime2 = millis();
+    if (currentTime2 - lastTime2 >= 1000) {  // 1000 milliseconds = 1 second
+        // Calculate RPM for encoder 2: pulseCount per second * 60 to convert to minutes
+        RPM2 = (pulseCount2 * 60.0) / 1.0;  // Assume 1 pulse per revolution for encoder 2
+        pulseCount2 = 0;  // Reset pulse count for the next second
+        lastTime2 = currentTime2;  // Update the last time for encoder 2
+
+        // Print the RPM for encoder 2 to the Serial Monitor
+        Serial.print("RPM 2: ");
+        Serial.println(RPM2);
+    }
+    
+    // Motors will keep running at full speed in the forward direction
+}

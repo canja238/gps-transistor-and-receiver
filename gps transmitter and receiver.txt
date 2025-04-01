@@ -1,0 +1,52 @@
+#include <SoftwareSerial.h>
+
+#define HC12_RX_PIN 10  // Connect HC-12 TX to this pin
+#define HC12_TX_PIN 11  // Connect HC-12 RX to this pin
+
+SoftwareSerial HC12_SERIAL(HC12_RX_PIN, HC12_TX_PIN); // Create a SoftwareSerial object for HC-12
+
+void setup() {
+    Serial.begin(115200);    // Communication with PC
+    HC12_SERIAL.begin(9600); // Communication with HC-12 module
+}
+
+void loop() {
+    // Check if there is data available from the HC-12 module
+    while (HC12_SERIAL.available()) {
+        String receivedData = HC12_SERIAL.readStringUntil('\n'); // Read the incoming data until newline
+        
+        // Print the received data to the Serial Monitor
+        Serial.println("Received: " + receivedData);
+    }
+}
+
+#include <TinyGPS++.h>
+
+#define GPS_SERIAL Serial1  // Use Serial1 for GPS (TX1=Pin 18, RX1=Pin 19 on Arduino Mega)
+#define HC12_SERIAL Serial2 // Use Serial2 for HC-12 (TX2=Pin 16, RX2=Pin 17 on Arduino Mega)
+
+TinyGPSPlus gps;
+
+void setup() {
+    Serial.begin(115200);    // Communication with PC
+    GPS_SERIAL.begin(9600);  // Communication with GPS module
+    HC12_SERIAL.begin(9600); // Communication with HC-12 module
+}
+
+void loop() {
+    // Read GPS data
+    while (GPS_SERIAL.available()) {
+        gps.encode(GPS_SERIAL.read());
+        
+        if (gps.location.isUpdated()) {
+            // Prepare GPS data as a string
+            String gpsData = "LAT:" + String(gps.location.lat(), 6) + ",LON:" + String(gps.location.lng(), 6);
+            
+            // Send GPS data to HC-12
+            HC12_SERIAL.println(gpsData);
+            
+            // Print GPS data to Serial Monitor for debugging
+            Serial.println("Sent: " + gpsData);
+        }
+    }
+}
