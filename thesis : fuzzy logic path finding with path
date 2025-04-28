@@ -1,0 +1,191 @@
+#include <TinyGPS++.h>
+#include <math.h>
+
+// Serial Ports
+TinyGPSPlus gps;
+
+// L293D Motor Driver Pins
+const int ENA = 12;
+const int ENB = 13;
+const int motorPin1 = 8;
+const int motorPin2 = 9;
+const int motorPin3 = 11;
+const int motorPin4 = 10;
+
+// Predefined path (84 waypoints)
+const double path[][2] = {
+  {7.214941000, 124.249145000}, {7.214940679, 124.249146167}, {7.214940357, 124.249147333},
+  {7.214940036, 124.249148500}, {7.214939714, 124.249149667}, {7.214939393, 124.249150833},
+  {7.214939071, 124.249152000}, {7.214938750, 124.249153167}, {7.214938429, 124.249154333},
+  {7.214938107, 124.249155500}, {7.214937786, 124.249156667}, {7.214937464, 124.249157833},
+  {7.214937143, 124.249159000}, {7.214936821, 124.249160167}, {7.214936500, 124.249161333},
+  {7.214936179, 124.249162500}, {7.214935857, 124.249163667}, {7.214935536, 124.249164833},
+  {7.214935214, 124.249166000}, {7.214934893, 124.249167167}, {7.214934571, 124.249168333},
+  {7.214934250, 124.249169500}, {7.214933929, 124.249170667}, {7.214933607, 124.249171833},
+  {7.214933286, 124.249173000}, {7.214932964, 124.249174167}, {7.214932643, 124.249175333},
+  {7.214932321, 124.249176500}, {7.214932000, 124.249177667}, {7.214931679, 124.249178833},
+  {7.214931357, 124.249180000}, {7.214931036, 124.249181167}, {7.214930714, 124.249182333},
+  {7.214930393, 124.249183500}, {7.214930071, 124.249184667}, {7.214929750, 124.249185833},
+  {7.214929429, 124.249187000}, {7.214929107, 124.249188167}, {7.214928786, 124.249189333},
+  {7.214928464, 124.249190500}, {7.214928143, 124.249191667}, {7.214927821, 124.249192833},
+  {7.214927500, 124.249194000}, {7.214927179, 124.249195167}, {7.214926857, 124.249196333},
+  {7.214926536, 124.249197500}, {7.214926214, 124.249198667}, {7.214925893, 124.249199833},
+  {7.214925571, 124.249201000}, {7.214925250, 124.249202167}, {7.214924929, 124.249203333},
+  {7.214924607, 124.249204500}, {7.214924286, 124.249205667}, {7.214923964, 124.249206833},
+  {7.214923643, 124.249208000}, {7.214923321, 124.249209167}, {7.214923000, 124.249210333},
+  {7.214922679, 124.249211500}, {7.214922357, 124.249212667}, {7.214922036, 124.249213833},
+  {7.214921714, 124.249215000}, {7.214921393, 124.249216167}, {7.214921071, 124.249217333},
+  {7.214920750, 124.249218500}, {7.214920429, 124.249219667}, {7.214920107, 124.249220833},
+  {7.214919786, 124.249222000}, {7.214919464, 124.249223167}, {7.214919143, 124.249224333},
+  {7.214918821, 124.249225500}, {7.214918500, 124.249226667}, {7.214918179, 124.249227833},
+  {7.214917857, 124.249229000}, {7.214917536, 124.249230167}, {7.214917214, 124.249231333},
+  {7.214916893, 124.249232500}, {7.214916571, 124.249233667}, {7.214916250, 124.249234833},
+  {7.214915929, 124.249236000}, {7.214915607, 124.249237167}, {7.214915286, 124.249238333},
+  {7.214914964, 124.249239500}, {7.214914643, 124.249240667}, {7.214914321, 124.249241833},
+  {7.214914000, 124.249243000}
+};
+
+// Current path index
+int currentWaypointIndex = 0;
+
+// Fuzzy logic variables
+double DOM[3][3];  // Degree of Membership
+double RULES[5];
+double WL[5], WR[5];
+double YL = 0, YR = 0;
+double tempSummationL = 0, tempSummationR = 0, tempSummation = 0;
+
+void setup() {
+  Serial.begin(9600);      // Debug
+  Serial1.begin(9600);     // GPS
+  Serial2.begin(9600);     // HC-12
+
+  // Motor Pins
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(motorPin1, OUTPUT);
+  pinMode(motorPin2, OUTPUT);
+  pinMode(motorPin3, OUTPUT);
+  pinMode(motorPin4, OUTPUT);
+}
+
+void loop() {
+  while (Serial1.available() > 0) {
+    gps.encode(Serial1.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    double currentLat = gps.location.lat();
+    double currentLon = gps.location.lng();
+
+    // Calculate distance and bearing to current waypoint
+    double latDiff = currentLat - path[currentWaypointIndex][0];
+    double lonDiff = currentLon - path[currentWaypointIndex][1];
+
+    // --- Bearings ---
+    double desiredBearing = calculateBearing(currentLat, currentLon, path[currentWaypointIndex][0], path[currentWaypointIndex][1]);
+    double currentHeading = calculateBearing(path[currentWaypointIndex][0], path[currentWaypointIndex][1], currentLat, currentLon);
+    double thetaError = currentHeading - desiredBearing;
+
+    if (thetaError > 180) thetaError -= 360;
+    if (thetaError < -180) thetaError += 360;
+
+    // Send GPS data to HC-12
+    Serial2.print("LAT: "); Serial2.print(currentLat, 8);
+    Serial2.print(", LON: "); Serial2.println(currentLon, 8);
+
+    // Fuzzy input membership
+    fuzzyMembership(latDiff, 0);
+    fuzzyMembership(lonDiff, 1);
+    fuzzyMembership(thetaError / 180.0, 2);
+
+    // Fuzzy Rules
+    RULES[0] = DOM[2][1];  WL[0] = 100; WR[0] = 100;   // Go forward
+    RULES[1] = DOM[2][0];  WL[1] = 60;  WR[1] = 100;   // Turn right
+    RULES[2] = DOM[2][2];  WL[2] = 100; WR[2] = 60;    // Turn left
+    RULES[3] = DOM[0][0] * DOM[1][0];  WL[3] = 50; WR[3] = 90;
+    RULES[4] = DOM[0][2] * DOM[1][2];  WL[4] = 90; WR[4] = 50;
+
+    // Defuzzification
+    for (int i = 0; i < 5; i++) {
+      tempSummationL += RULES[i] * WL[i];
+      tempSummationR += RULES[i] * WR[i];
+      tempSummation += RULES[i];
+    }
+
+    if (tempSummation != 0) {
+      YL = tempSummationL / tempSummation;
+      YR = tempSummationR / tempSummation;
+    } else {
+      YL = 0; YR = 0;
+    }
+
+    driveMotorL293D(YL, YR);
+
+    // Check if the robot is close enough to the current waypoint to move to the next one
+    if (abs(latDiff) < 0.0001 && abs(lonDiff) < 0.0001) {
+      currentWaypointIndex++;
+      if (currentWaypointIndex >= 84) {
+        currentWaypointIndex = 0;  // Loop through waypoints
+      }
+    }
+
+    // Reset sums
+    tempSummation = tempSummationL = tempSummationR = 0;
+
+    Serial.print("Theta Error: "); Serial.print(thetaError);
+    Serial.print(" | YL: "); Serial.print(YL);
+    Serial.print(" | YR: "); Serial.println(YR);
+  }
+
+  delay(1000);  // 1 Hz update rate
+}
+
+// --- L293D Motor Driver Function ---
+void driveMotorL293D(double speedL, double speedR) {
+  speedL = constrain(speedL, -100, 100);
+  speedR = constrain(speedR, -100, 100);
+
+  analogWrite(ENA, abs(speedL) * 2.55);
+  analogWrite(ENB, abs(speedR) * 2.55);
+
+  // Left Motor Direction
+  if (speedL >= 0) {
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, LOW);
+  } else {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+  }
+
+  // Right Motor Direction
+  if (speedR >= 0) {
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
+  } else {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+  }
+}
+
+// --- Membership Function ---
+void fuzzyMembership(double input, int index) {
+  if (input < -0.00001) {
+    DOM[index][0] = 1; DOM[index][1] = 0; DOM[index][2] = 0;
+  } else if (input > 0.00001) {
+    DOM[index][0] = 0; DOM[index][1] = 0; DOM[index][2] = 1;
+  } else {
+    DOM[index][0] = 0; DOM[index][1] = 1; DOM[index][2] = 0;
+  }
+}
+
+// --- Bearing Calculation ---
+double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
+  lat1 = radians(lat1);
+  lat2 = radians(lat2);
+  double dLon = radians(lon2 - lon1);
+  double y = sin(dLon) * cos(lat2);
+  double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+  double bearing = atan2(y, x);
+  return fmod(degrees(bearing) + 360.0, 360.0);
+}
