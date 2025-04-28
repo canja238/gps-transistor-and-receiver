@@ -1,0 +1,156 @@
+#include <TinyGPS++.h>
+#include <math.h>
+
+// Serial Ports
+TinyGPSPlus gps;
+
+// L293D Motor Driver Pins
+const int ENA = 12;
+const int ENB = 13;
+const int motorPin1 = 8;
+const int motorPin2 = 9;
+const int motorPin3 = 11;
+const int motorPin4 = 10;
+
+// Target waypoint (edit as needed)
+double targetLat = 7.214914000;
+double targetLon = 124.249243000;
+
+// Previous GPS position
+double prevLat = 0.0, prevLon = 0.0;
+
+// Fuzzy logic variables
+double DOM[3][3];  // Degree of Membership
+double RULES[5];
+double WL[5], WR[5];
+double YL = 0, YR = 0;
+double tempSummationL = 0, tempSummationR = 0, tempSummation = 0;
+
+void setup() {
+  Serial.begin(9600);      // Debug
+  Serial1.begin(9600);     // GPS
+  Serial2.begin(9600);     // HC-12
+
+  // Motor Pins
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(motorPin1, OUTPUT);
+  pinMode(motorPin2, OUTPUT);
+  pinMode(motorPin3, OUTPUT);
+  pinMode(motorPin4, OUTPUT);
+}
+
+void loop() {
+  while (Serial1.available() > 0) {
+    gps.encode(Serial1.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    double currentLat = gps.location.lat();
+    double currentLon = gps.location.lng();
+
+    double latDiff = currentLat - targetLat;
+    double lonDiff = currentLon - targetLon;
+
+    // --- Bearings ---
+    double desiredBearing = calculateBearing(currentLat, currentLon, targetLat, targetLon);
+    double currentHeading = calculateBearing(prevLat, prevLon, currentLat, currentLon);
+    double thetaError = currentHeading - desiredBearing;
+
+    if (thetaError > 180) thetaError -= 360;
+    if (thetaError < -180) thetaError += 360;
+
+    prevLat = currentLat;
+    prevLon = currentLon;
+
+    // Send GPS data to HC-12
+    Serial2.print("LAT: "); Serial2.print(currentLat, 8);
+    Serial2.print(", LON: "); Serial2.println(currentLon, 8);
+
+    // Fuzzy input membership
+    fuzzyMembership(latDiff, 0);
+    fuzzyMembership(lonDiff, 1);
+    fuzzyMembership(thetaError / 180.0, 2);
+
+    // Fuzzy Rules
+    RULES[0] = DOM[2][1];  WL[0] = 100; WR[0] = 100;   // Go forward
+    RULES[1] = DOM[2][0];  WL[1] = 60;  WR[1] = 100;   // Turn right
+    RULES[2] = DOM[2][2];  WL[2] = 100; WR[2] = 60;    // Turn left
+    RULES[3] = DOM[0][0] * DOM[1][0];  WL[3] = 50; WR[3] = 90;
+    RULES[4] = DOM[0][2] * DOM[1][2];  WL[4] = 90; WR[4] = 50;
+
+    // Defuzzification
+    for (int i = 0; i < 5; i++) {
+      tempSummationL += RULES[i] * WL[i];
+      tempSummationR += RULES[i] * WR[i];
+      tempSummation += RULES[i];
+    }
+
+    if (tempSummation != 0) {
+      YL = tempSummationL / tempSummation;
+      YR = tempSummationR / tempSummation;
+    } else {
+      YL = 0; YR = 0;
+    }
+
+    driveMotorL293D(YL, YR);
+
+    // Reset sums
+    tempSummation = tempSummationL = tempSummationR = 0;
+
+    Serial.print("Theta Error: "); Serial.print(thetaError);
+    Serial.print(" | YL: "); Serial.print(YL);
+    Serial.print(" | YR: "); Serial.println(YR);
+  }
+
+  delay(1000);  // 1 Hz update rate
+}
+
+// --- L293D Motor Driver Function ---
+void driveMotorL293D(double speedL, double speedR) {
+  speedL = constrain(speedL, -100, 100);
+  speedR = constrain(speedR, -100, 100);
+
+  analogWrite(ENA, abs(speedL) * 2.55);
+  analogWrite(ENB, abs(speedR) * 2.55);
+
+  // Left Motor Direction
+  if (speedL >= 0) {
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, LOW);
+  } else {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+  }
+
+  // Right Motor Direction
+  if (speedR >= 0) {
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
+  } else {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+  }
+}
+
+// --- Membership Function ---
+void fuzzyMembership(double input, int index) {
+  if (input < -0.00001) {
+    DOM[index][0] = 1; DOM[index][1] = 0; DOM[index][2] = 0;
+  } else if (input > 0.00001) {
+    DOM[index][0] = 0; DOM[index][1] = 0; DOM[index][2] = 1;
+  } else {
+    DOM[index][0] = 0; DOM[index][1] = 1; DOM[index][2] = 0;
+  }
+}
+
+// --- Bearing Calculation ---
+double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
+  lat1 = radians(lat1);
+  lat2 = radians(lat2);
+  double dLon = radians(lon2 - lon1);
+  double y = sin(dLon) * cos(lat2);
+  double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+  double bearing = atan2(y, x);
+  return fmod(degrees(bearing) + 360.0, 360.0);
+}
