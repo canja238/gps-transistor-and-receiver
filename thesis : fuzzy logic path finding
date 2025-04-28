@@ -1,156 +1,181 @@
+#include <SoftwareSerial.h>
 #include <TinyGPS++.h>
-#include <math.h>
 
-// Serial Ports
+// GPS Module
+#define GPS_SERIAL Serial1  // Use Serial1 for GPS (TX1=Pin 18, RX1=Pin 19 on Arduino Mega)
 TinyGPSPlus gps;
 
-// L293D Motor Driver Pins
-const int ENA = 12;
-const int ENB = 13;
-const int motorPin1 = 8;
-const int motorPin2 = 9;
-const int motorPin3 = 11;
-const int motorPin4 = 10;
+// HC-12 for communication (if necessary)
+#define HC12_SERIAL Serial2 // Use Serial2 for HC-12 (TX2=Pin 16, RX2=Pin 17 on Arduino Mega)
 
-// Target waypoint (edit as needed)
-double targetLat = 7.214914000;
-double targetLon = 124.249243000;
+// Motor control pins for L293D motor driver
+const int ENA = 12;  // Enable pin for Motor A
+const int ENB = 13;  // Enable pin for Motor B
+const int motorPin1  = 8;  // Pin 14 of L293D (Motor A - Direction 1)
+const int motorPin2  = 9;  // Pin 10 of L293D (Motor A - Direction 2)
+const int motorPin3  = 11; // Pin 7 of L293D (Motor B - Direction 1)
+const int motorPin4  = 10; // Pin 2 of L293D (Motor B - Direction 2)
 
-// Previous GPS position
-double prevLat = 0.0, prevLon = 0.0;
+// GPS Target coordinates
+double targetLatitude = 37.7749;  // Target latitude (example: San Francisco)
+double targetLongitude = -122.4194; // Target longitude (example: San Francisco)
 
-// Fuzzy logic variables
-double DOM[3][3];  // Degree of Membership
-double RULES[5];
-double WL[5], WR[5];
-double YL = 0, YR = 0;
-double tempSummationL = 0, tempSummationR = 0, tempSummation = 0;
+// Triangular Membership Function (TMF) Parameters for distance
+double TMFCenter[] = {10, 50, 100};  // Near, Mid, Far distances in meters (example values)
+double TMFWidth[] = {20, 40, 80};   // Width of each fuzzy region
+
+double DOM[3];  // Degree of Membership for each fuzzy set (Near, Mid, Far)
+
+double RULES[10];  // Fuzzy rule results
+double WL[10];     // Left motor speeds corresponding to rules
+double WR[10];     // Right motor speeds corresponding to rules
+
+double tempSummationL = 0;
+double tempSummationR = 0;
+double tempSummation = 0;
+
+double YL = 0;  // Left motor speed (defuzzified)
+double YR = 0;  // Right motor speed (defuzzified)
 
 void setup() {
-  Serial.begin(9600);      // Debug
-  Serial1.begin(9600);     // GPS
-  Serial2.begin(9600);     // HC-12
+  // Start serial communication for GPS and HC-12
+  Serial.begin(9600);
+  GPS_SERIAL.begin(9600);
 
-  // Motor Pins
-  pinMode(ENA, OUTPUT);
-  pinMode(ENB, OUTPUT);
-  pinMode(motorPin1, OUTPUT);
-  pinMode(motorPin2, OUTPUT);
-  pinMode(motorPin3, OUTPUT);
-  pinMode(motorPin4, OUTPUT);
+  // Initialize motor control pins
+  pinMode(ENA, OUTPUT);   // Enable pin for Motor A
+  pinMode(ENB, OUTPUT);   // Enable pin for Motor B
+  pinMode(motorPin1, OUTPUT); // Motor A direction pin 1
+  pinMode(motorPin2, OUTPUT); // Motor A direction pin 2
+  pinMode(motorPin3, OUTPUT); // Motor B direction pin 1
+  pinMode(motorPin4, OUTPUT); // Motor B direction pin 2
+
+  Serial.println("Robot GPS Pathfinding Initialized...");
 }
 
 void loop() {
-  while (Serial1.available() > 0) {
-    gps.encode(Serial1.read());
+  // Check for new GPS data
+  while (GPS_SERIAL.available() > 0) {
+    gps.encode(GPS_SERIAL.read());
   }
 
   if (gps.location.isUpdated()) {
     double currentLat = gps.location.lat();
     double currentLon = gps.location.lng();
+    
+    // Calculate the distance from the current position to the target GPS coordinates
+    double distanceToTarget = calculateDistance(currentLat, currentLon, targetLatitude, targetLongitude);
 
-    double latDiff = currentLat - targetLat;
-    double lonDiff = currentLon - targetLon;
+    // Display the current position and distance to the target
+    Serial.print("Current Latitude: ");
+    Serial.println(currentLat, 6);
+    Serial.print("Current Longitude: ");
+    Serial.println(currentLon, 6);
+    Serial.print("Distance to Target: ");
+    Serial.println(distanceToTarget);
 
-    // --- Bearings ---
-    double desiredBearing = calculateBearing(currentLat, currentLon, targetLat, targetLon);
-    double currentHeading = calculateBearing(prevLat, prevLon, currentLat, currentLon);
-    double thetaError = currentHeading - desiredBearing;
+    // Calculate Degree of Membership (DOM) for distance using triangular membership function
+    for (int i = 0; i < 3; i++) {
+      if ((TMFCenter[i] - TMFWidth[i] / 2) < distanceToTarget && distanceToTarget < (TMFCenter[i] + TMFWidth[i] / 2)) {
+        // Calculate the DOM value for the distance
+        DOM[i] = 1 - (2 * fabs(distanceToTarget - TMFCenter[i]) / TMFWidth[i]);
+      } else {
+        DOM[i] = 0;
+      }
+    }
 
-    if (thetaError > 180) thetaError -= 360;
-    if (thetaError < -180) thetaError += 360;
+    // Display DOM values for debugging
+    for (int i = 0; i < 3; i++) {
+      Serial.print("DOM[");
+      Serial.print(i);
+      Serial.print("] = ");
+      Serial.println(DOM[i]);
+    }
 
-    prevLat = currentLat;
-    prevLon = currentLon;
+    // Define fuzzy rules based on DOM values (these rules can be adjusted based on your needs)
+    RULES[0] = DOM[0];  // Close range
+    WL[0] = 50;
+    WR[0] = 50;
 
-    // Send GPS data to HC-12
-    Serial2.print("LAT: "); Serial2.print(currentLat, 8);
-    Serial2.print(", LON: "); Serial2.println(currentLon, 8);
+    RULES[1] = DOM[1];  // Mid range
+    WL[1] = 75;
+    WR[1] = 75;
 
-    // Fuzzy input membership
-    fuzzyMembership(latDiff, 0);
-    fuzzyMembership(lonDiff, 1);
-    fuzzyMembership(thetaError / 180.0, 2);
+    RULES[2] = DOM[2];  // Far range
+    WL[2] = 100;
+    WR[2] = 100;
 
-    // Fuzzy Rules
-    RULES[0] = DOM[2][1];  WL[0] = 100; WR[0] = 100;   // Go forward
-    RULES[1] = DOM[2][0];  WL[1] = 60;  WR[1] = 100;   // Turn right
-    RULES[2] = DOM[2][2];  WL[2] = 100; WR[2] = 60;    // Turn left
-    RULES[3] = DOM[0][0] * DOM[1][0];  WL[3] = 50; WR[3] = 90;
-    RULES[4] = DOM[0][2] * DOM[1][2];  WL[4] = 90; WR[4] = 50;
-
-    // Defuzzification
-    for (int i = 0; i < 5; i++) {
+    // Calculate the defuzzified values YL and YR (left and right motor speeds)
+    for (int i = 0; i < 3; i++) {
       tempSummationL += RULES[i] * WL[i];
       tempSummationR += RULES[i] * WR[i];
       tempSummation += RULES[i];
     }
 
-    if (tempSummation != 0) {
-      YL = tempSummationL / tempSummation;
-      YR = tempSummationR / tempSummation;
+    YL = tempSummationL / tempSummation;
+    YR = tempSummationR / tempSummation;
+
+    // Output the results for motor control
+    Serial.print("YL = ");
+    Serial.print(YL);
+    Serial.print("    YR = ");
+    Serial.println(YR);
+
+    // Set motor speeds based on the defuzzified values
+    motorSpeedLeft = YL;   // Set left motor speed from fuzzy logic
+    motorSpeedRight = YR;  // Set right motor speed from fuzzy logic
+
+    // Control Motor A (Left motor)
+    if (motorSpeedLeft > 0) {
+      digitalWrite(motorPin1, HIGH);
+      digitalWrite(motorPin2, LOW);
+      analogWrite(ENA, motorSpeedLeft);  // Set speed
+    } else if (motorSpeedLeft < 0) {
+      digitalWrite(motorPin1, LOW);
+      digitalWrite(motorPin2, HIGH);
+      analogWrite(ENA, -motorSpeedLeft);  // Set speed (for reverse)
     } else {
-      YL = 0; YR = 0;
+      analogWrite(ENA, 0);  // Stop motor if speed is 0
     }
 
-    driveMotorL293D(YL, YR);
+    // Control Motor B (Right motor)
+    if (motorSpeedRight > 0) {
+      digitalWrite(motorPin3, HIGH);
+      digitalWrite(motorPin4, LOW);
+      analogWrite(ENB, motorSpeedRight);  // Set speed
+    } else if (motorSpeedRight < 0) {
+      digitalWrite(motorPin3, LOW);
+      digitalWrite(motorPin4, HIGH);
+      analogWrite(ENB, -motorSpeedRight);  // Set speed (for reverse)
+    } else {
+      analogWrite(ENB, 0);  // Stop motor if speed is 0
+    }
 
-    // Reset sums
-    tempSummation = tempSummationL = tempSummationR = 0;
-
-    Serial.print("Theta Error: "); Serial.print(thetaError);
-    Serial.print(" | YL: "); Serial.print(YL);
-    Serial.print(" | YR: "); Serial.println(YR);
+    // Reset temporary variables for next iteration
+    tempSummationL = 0;
+    tempSummationR = 0;
+    tempSummation = 0;
   }
 
-  delay(1000);  // 1 Hz update rate
+  // Delay to allow for more readable output
+  delay(1000);
 }
 
-// --- L293D Motor Driver Function ---
-void driveMotorL293D(double speedL, double speedR) {
-  speedL = constrain(speedL, -100, 100);
-  speedR = constrain(speedR, -100, 100);
+// Function to calculate the distance between two GPS coordinates (in meters)
+double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+  const double earthRadius = 6371000;  // Radius of the Earth in meters
+  double lat1Rad = radians(lat1);
+  double lon1Rad = radians(lon1);
+  double lat2Rad = radians(lat2);
+  double lon2Rad = radians(lon2);
 
-  analogWrite(ENA, abs(speedL) * 2.55);
-  analogWrite(ENB, abs(speedR) * 2.55);
+  double dlat = lat2Rad - lat1Rad;
+  double dlon = lon2Rad - lon1Rad;
 
-  // Left Motor Direction
-  if (speedL >= 0) {
-    digitalWrite(motorPin1, HIGH);
-    digitalWrite(motorPin2, LOW);
-  } else {
-    digitalWrite(motorPin1, LOW);
-    digitalWrite(motorPin2, HIGH);
-  }
+  double a = sin(dlat / 2) * sin(dlat / 2) +
+             cos(lat1Rad) * cos(lat2Rad) *
+             sin(dlon / 2) * sin(dlon / 2);
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
 
-  // Right Motor Direction
-  if (speedR >= 0) {
-    digitalWrite(motorPin3, HIGH);
-    digitalWrite(motorPin4, LOW);
-  } else {
-    digitalWrite(motorPin3, LOW);
-    digitalWrite(motorPin4, HIGH);
-  }
-}
-
-// --- Membership Function ---
-void fuzzyMembership(double input, int index) {
-  if (input < -0.00001) {
-    DOM[index][0] = 1; DOM[index][1] = 0; DOM[index][2] = 0;
-  } else if (input > 0.00001) {
-    DOM[index][0] = 0; DOM[index][1] = 0; DOM[index][2] = 1;
-  } else {
-    DOM[index][0] = 0; DOM[index][1] = 1; DOM[index][2] = 0;
-  }
-}
-
-// --- Bearing Calculation ---
-double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
-  lat1 = radians(lat1);
-  lat2 = radians(lat2);
-  double dLon = radians(lon2 - lon1);
-  double y = sin(dLon) * cos(lat2);
-  double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
-  double bearing = atan2(y, x);
-  return fmod(degrees(bearing) + 360.0, 360.0);
+  return earthRadius * c;  // Distance in meters
 }
