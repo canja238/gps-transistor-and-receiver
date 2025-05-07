@@ -1,0 +1,220 @@
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+
+// GPS Module
+#define GPS_SERIAL Serial1  // Use Serial1 for GPS (TX1=Pin 18, RX1=Pin 19 on Arduino Mega)
+TinyGPSPlus gps;
+
+// HC-12 for communication (if necessary)
+#define HC12_SERIAL Serial2 // Use Serial2 for HC-12 (TX2=Pin 16, RX2=Pin 17 on Arduino Mega)
+
+// Motor control pins for L293D motor driver
+const int ENA = 12;  // Enable pin for Motor A
+const int ENB = 13;  // Enable pin for Motor B
+const int motorPin1  = 8;  // Pin 14 of L293D (Motor A - Direction 1)
+const int motorPin2  = 9;  // Pin 10 of L293D (Motor A - Direction 2)
+const int motorPin3  = 11; // Pin 7 of L293D (Motor B - Direction 1)
+const int motorPin4  = 10; // Pin 2 of L293D (Motor B - Direction 2)
+
+// Path coordinates (Predefined)
+double path[100][2] = {
+  {7.214941000, 124.249145000}, {7.214940679, 124.249146167}, {7.214940357, 124.249147333},
+  {7.214940036, 124.249148500}, {7.214939714, 124.249149667}, {7.214939393, 124.249150833},
+  {7.214939071, 124.249152000}, {7.214938750, 124.249153167}, {7.214938429, 124.249154333},
+  {7.214938107, 124.249155500}, {7.214937786, 124.249156667}, {7.214937464, 124.249157833},
+  {7.214937143, 124.249159000}, {7.214936821, 124.249160167}, {7.214936500, 124.249161333},
+  {7.214936179, 124.249162500}, {7.214935857, 124.249163667}, {7.214935536, 124.249164833},
+  {7.214935214, 124.249166000}, {7.214934893, 124.249167167}, {7.214934571, 124.249168333},
+  {7.214934250, 124.249169500}, {7.214933929, 124.249170667}, {7.214933607, 124.249171833},
+  {7.214933286, 124.249173000}, {7.214932964, 124.249174167}, {7.214932643, 124.249175333},
+  {7.214932321, 124.249176500}, {7.214932000, 124.249177667}, {7.214931679, 124.249178833},
+  {7.214931357, 124.249180000}, {7.214931036, 124.249181167}, {7.214930714, 124.249182333},
+  {7.214930393, 124.249183500}, {7.214930071, 124.249184667}, {7.214929750, 124.249185833},
+  {7.214929429, 124.249187000}, {7.214929107, 124.249188167}, {7.214928786, 124.249189333},
+  {7.214928464, 124.249190500}, {7.214928143, 124.249191667}, {7.214927821, 124.249192833},
+  {7.214927500, 124.249194000}, {7.214927179, 124.249195167}, {7.214926857, 124.249196333},
+  {7.214926536, 124.249197500}, {7.214926214, 124.249198667}, {7.214925893, 124.249199833},
+  {7.214925571, 124.249201000}, {7.214925250, 124.249202167}, {7.214924929, 124.249203333},
+  {7.214924607, 124.249204500}, {7.214924286, 124.249205667}, {7.214923964, 124.249206833},
+  {7.214923643, 124.249208000}, {7.214923321, 124.249209167}, {7.214923000, 124.249210333},
+  {7.214922679, 124.249211500}, {7.214922357, 124.249212667}, {7.214922036, 124.249213833},
+  {7.214921714, 124.249215000}, {7.214921393, 124.249216167}, {7.214921071, 124.249217333},
+  {7.214920750, 124.249218500}, {7.214920429, 124.249219667}, {7.214920107, 124.249220833},
+  {7.214919786, 124.249222000}, {7.214919464, 124.249223167}, {7.214919143, 124.249224333},
+  {7.214918821, 124.249225500}, {7.214918500, 124.249226667}, {7.214918179, 124.249227833},
+  {7.214917857, 124.249229000}, {7.214917536, 124.249230167}, {7.214917214, 124.249231333},
+  {7.214916893, 124.249232500}, {7.214916571, 124.249233667}, {7.214916250, 124.249234833},
+  {7.214915929, 124.249236000}, {7.214915607, 124.249237167}, {7.214915286, 124.249238333},
+  {7.214914964, 124.249239500}, {7.214914643, 124.249240667}, {7.214914321, 124.249241833},
+  {7.214914000, 124.249243000}
+
+};
+int pathIndex = 0;  // Index to track the current target in the path
+
+// Triangular Membership Function (TMF) Parameters for distance
+double TMFCenter[] = {10, 50, 100};  // Near, Mid, Far distances in meters
+double TMFWidth[] = {20, 40, 80};   // Width of each fuzzy region
+
+double DOM[3];  // Degree of Membership for each fuzzy set (Near, Mid, Far)
+
+double RULES[10];  // Fuzzy rule results
+double WL[10];     // Left motor speeds corresponding to rules
+double WR[10];     // Right motor speeds corresponding to rules
+
+double tempSummationL = 0;
+double tempSummationR = 0;
+double tempSummation = 0;
+
+double YL = 0;  // Left motor speed (defuzzified)
+double YR = 0;  // Right motor speed (defuzzified)
+
+void setup() {
+  // Start serial communication for GPS and HC-12
+  Serial.begin(9600);
+  GPS_SERIAL.begin(9600);
+
+  // Initialize motor control pins
+  pinMode(ENA, OUTPUT);   // Enable pin for Motor A
+  pinMode(ENB, OUTPUT);   // Enable pin for Motor B
+  pinMode(motorPin1, OUTPUT); // Motor A direction pin 1
+  pinMode(motorPin2, OUTPUT); // Motor A direction pin 2
+  pinMode(motorPin3, OUTPUT); // Motor B direction pin 1
+  pinMode(motorPin4, OUTPUT); // Motor B direction pin 2
+
+  Serial.println("Robot GPS Pathfinding Initialized...");
+}
+
+void loop() {
+  // Check for new GPS data
+  while (GPS_SERIAL.available() > 0) {
+    gps.encode(GPS_SERIAL.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    double currentLat = gps.location.lat();
+    double currentLon = gps.location.lng();
+    
+    // Calculate the distance from the current position to the next target in the path
+    double distanceToTarget = calculateDistance(currentLat, currentLon, path[pathIndex][0], path[pathIndex][1]);
+
+    // Display the current position and distance to the target
+    Serial.print("Current Latitude: ");
+    Serial.println(currentLat, 6);
+    Serial.print("Current Longitude: ");
+    Serial.println(currentLon, 6);
+    Serial.print("Distance to Target: ");
+    Serial.println(distanceToTarget);
+
+    // Calculate Degree of Membership (DOM) for distance using triangular membership function
+    for (int i = 0; i < 3; i++) {
+      if ((TMFCenter[i] - TMFWidth[i] / 2) < distanceToTarget && distanceToTarget < (TMFCenter[i] + TMFWidth[i] / 2)) {
+        // Calculate the DOM value for the distance
+        DOM[i] = 1 - (2 * fabs(distanceToTarget - TMFCenter[i]) / TMFWidth[i]);
+      } else {
+        DOM[i] = 0;
+      }
+    }
+
+    // Display DOM values for debugging
+    for (int i = 0; i < 3; i++) {
+      Serial.print("DOM[");
+      Serial.print(i);
+      Serial.print("] = ");
+      Serial.println(DOM[i]);
+    }
+
+    // Define fuzzy rules based on DOM values (these rules can be adjusted based on your needs)
+    RULES[0] = DOM[0];  // Close range
+    WL[0] = 50;
+    WR[0] = 50;
+
+    RULES[1] = DOM[1];  // Mid range
+    WL[1] = 75;
+    WR[1] = 75;
+
+    RULES[2] = DOM[2];  // Far range
+    WL[2] = 100;
+    WR[2] = 100;
+
+    // Calculate the defuzzified values YL and YR (left and right motor speeds)
+    for (int i = 0; i < 3; i++) {
+      tempSummationL += RULES[i] * WL[i];
+      tempSummationR += RULES[i] * WR[i];
+      tempSummation += RULES[i];
+    }
+
+    YL = tempSummationL / tempSummation;
+    YR = tempSummationR / tempSummation;
+
+    // Output the results for motor control
+    Serial.print("YL = ");
+    Serial.print(YL);
+    Serial.print("    YR = ");
+    Serial.println(YR);
+
+    // Set motor speeds based on the defuzzified values
+    motorSpeedLeft = YL;   // Set left motor speed from fuzzy logic
+    motorSpeedRight = YR;  // Set right motor speed from fuzzy logic
+
+    // Control Motor A (Left motor)
+    if (motorSpeedLeft > 0) {
+      digitalWrite(motorPin1, HIGH);
+      digitalWrite(motorPin2, LOW);
+      analogWrite(ENA, motorSpeedLeft);  // Set speed
+    } else if (motorSpeedLeft < 0) {
+      digitalWrite(motorPin1, LOW);
+      digitalWrite(motorPin2, HIGH);
+      analogWrite(ENA, -motorSpeedLeft);  // Set speed (for reverse)
+    } else {
+      analogWrite(ENA, 0);  // Stop motor if speed is 0
+    }
+
+    // Control Motor B (Right motor)
+    if (motorSpeedRight > 0) {
+      digitalWrite(motorPin3, HIGH);
+      digitalWrite(motorPin4, LOW);
+      analogWrite(ENB, motorSpeedRight);  // Set speed
+    } else if (motorSpeedRight < 0) {
+      digitalWrite(motorPin3, LOW);
+      digitalWrite(motorPin4, HIGH);
+      analogWrite(ENB, -motorSpeedRight);  // Set speed (for reverse)
+    } else {
+      analogWrite(ENB, 0);  // Stop motor if speed is 0
+    }
+
+    // If the robot is close enough to the target, move to the next path coordinate
+    if (distanceToTarget < 5) {
+      pathIndex++;  // Move to the next point in the path
+      if (pathIndex >= sizeof(path)/sizeof(path[0])) {
+        pathIndex = 0;  // If the robot reaches the end of the path, start over
+      }
+    }
+
+    // Reset temporary variables for next iteration
+    tempSummationL = 0;
+    tempSummationR = 0;
+    tempSummation = 0;
+  }
+
+  // Delay to allow for more readable output
+  delay(1000);
+}
+
+// Function to calculate the distance between two GPS coordinates (in meters)
+double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+  const double earthRadius = 6371000;  // Radius of the Earth in meters
+  double lat1Rad = radians(lat1);
+  double lon1Rad = radians(lon1);
+  double lat2Rad = radians(lat2);
+  double lon2Rad = radians(lon2);
+
+  double dlat = lat2Rad - lat1Rad;
+  double dlon = lon2Rad - lon1Rad;
+
+  double a = sin(dlat / 2) * sin(dlat / 2) +
+             cos(lat1Rad) * cos(lat2Rad) *
+             sin(dlon / 2) * sin(dlon / 2);
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+  return earthRadius * c;  // Distance in meters
+}
