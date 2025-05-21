@@ -1,3 +1,5 @@
+receiver:
+
 #include <SoftwareSerial.h>
 
 #define HC12_RX_PIN 10  // Connect HC-12 TX to this pin
@@ -20,6 +22,9 @@ void loop() {
     }
 }
 
+
+
+transmitter
 #include <TinyGPS++.h>
 
 #define GPS_SERIAL Serial1  // Use Serial1 for GPS (TX1=Pin 18, RX1=Pin 19 on Arduino Mega)
