@@ -1,0 +1,41 @@
+#include <SoftwareSerial.h>
+
+#define HC12_RX_PIN 10  // Connect HC-12 TX to this pin
+#define HC12_TX_PIN 11  // Connect HC-12 RX to this pin
+
+// Create a SoftwareSerial object
+SoftwareSerial hc12Serial(HC12_RX_PIN, HC12_TX_PIN);  // RX, TX
+
+void setup() {
+  // Start hardware serial communication for debugging
+  Serial.begin(9600); 
+  // Start SoftwareSerial communication with HC-12
+  hc12Serial.begin(9600);  
+
+  // Send the AT+RX command
+  sendCommand("AT+RX");
+
+  // Wait for response and print it to Serial Monitor
+  while (hc12Serial.available()) {
+    Serial.write(hc12Serial.read());
+  }
+}
+
+void loop() {
+  // Check if there's anything coming from the Serial Monitor and send to HC-12
+  if (Serial.available()) {
+    hc12Serial.write(Serial.read());
+  }
+  
+  // Check if the HC-12 sends anything and print it to the Serial Monitor
+  if (hc12Serial.available()) {
+    Serial.write(hc12Serial.read());
+  }
+}
+
+// Function to send a command to HC-12
+void sendCommand(String command) {
+  hc12Serial.println(command);
+  delay(100);  // Small delay to let the HC-12 respond
+  Serial.println("Sent command: " + command);
+}
