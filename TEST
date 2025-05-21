@@ -5,7 +5,7 @@
 
 // Create a SoftwareSerial object
 SoftwareSerial hc12Serial(HC12_RX_PIN, HC12_TX_PIN);  // RX, TX
-
+ 
 void setup() {
   // Start hardware serial communication for debugging
   Serial.begin(9600); 
