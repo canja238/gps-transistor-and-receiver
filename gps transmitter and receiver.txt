@@ -55,3 +55,68 @@ void loop() {
         }
     }
 }
+
+
+// Improved transmitter version
+#include <TinyGPS++.h>
+
+#define GPS_SERIAL Serial1
+#define HC12_SERIAL Serial2 
+#define TRANSMIT_INTERVAL 1000  // Send data every 1 second
+
+TinyGPSPlus gps;
+unsigned long lastTransmitTime = 0;
+
+void setup() {
+    Serial.begin(115200);
+    GPS_SERIAL.begin(9600);
+    HC12_SERIAL.begin(9600);
+}
+
+void loop() {
+    // Read GPS data
+    while (GPS_SERIAL.available()) {
+        gps.encode(GPS_SERIAL.read());
+    }
+
+    // Only send if we have a fix and interval has passed
+    if (gps.location.isValid() && millis() - lastTransmitTime > TRANSMIT_INTERVAL) {
+        String gpsData = "LAT:" + String(gps.location.lat(), 6) + 
+                        ",LON:" + String(gps.location.lng(), 6) +
+                        ",SAT:" + String(gps.satellites.value());
+        
+        HC12_SERIAL.println(gpsData);
+        Serial.println("Sent: " + gpsData);
+        
+        lastTransmitTime = millis();
+    }
+}
+
+// Improved receiver version
+#include <SoftwareSerial.h>
+
+#define HC12_RX_PIN 10
+#define HC12_TX_PIN 11
+#define MAX_DATA_LENGTH 64  // Prevent buffer overflow
+
+SoftwareSerial HC12_SERIAL(HC12_RX_PIN, HC12_TX_PIN);
+
+void setup() {
+    Serial.begin(115200);
+    HC12_SERIAL.begin(9600);
+}
+
+void loop() {
+    if (HC12_SERIAL.available()) {
+        String receivedData = HC12_SERIAL.readStringUntil('\n');
+        receivedData.trim();  // Remove any whitespace
+        
+        // Basic validation
+        if (receivedData.length() > 0 && receivedData.length() < MAX_DATA_LENGTH) {
+            Serial.println("Received: " + receivedData);
+            
+            // Here you could add parsing of the data:
+            // if (receivedData.startsWith("LAT:")) { ... }
+        }
+    }
+}
